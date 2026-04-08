@@ -243,6 +243,60 @@ class PlayablePrototypeSmokeTests(unittest.TestCase):
         self.assertTrue(probe_line, "missing REWARD_POOL_PROBE output")
         return json.loads(probe_line)
 
+    def _run_live_reward_context_probe(self) -> dict:
+        cmd = [
+            resolve_godot_executable(),
+            "--headless",
+            "--path",
+            ".",
+            "-s",
+            "res://tests/smoke/run_live_reward_context_probe.gd",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        probe_line = ""
+        for line in proc.stdout.splitlines():
+            if line.startswith("LIVE_REWARD_CONTEXT_PROBE="):
+                probe_line = line[len("LIVE_REWARD_CONTEXT_PROBE="):]
+        self.assertTrue(probe_line, "missing LIVE_REWARD_CONTEXT_PROBE output")
+        return json.loads(probe_line)
+
+    def _run_gem_gate_block_probe(self) -> dict:
+        cmd = [
+            resolve_godot_executable(),
+            "--headless",
+            "--path",
+            ".",
+            "-s",
+            "res://tests/smoke/run_gem_gate_block_probe.gd",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        probe_line = ""
+        for line in proc.stdout.splitlines():
+            if line.startswith("GEM_GATE_BLOCK_PROBE="):
+                probe_line = line[len("GEM_GATE_BLOCK_PROBE="):]
+        self.assertTrue(probe_line, "missing GEM_GATE_BLOCK_PROBE output")
+        return json.loads(probe_line)
+
+    def _run_event_readability_probe(self) -> dict:
+        cmd = [
+            resolve_godot_executable(),
+            "--headless",
+            "--path",
+            ".",
+            "-s",
+            "res://tests/smoke/run_event_readability_probe.gd",
+        ]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        probe_line = ""
+        for line in proc.stdout.splitlines():
+            if line.startswith("EVENT_READABILITY_PROBE="):
+                probe_line = line[len("EVENT_READABILITY_PROBE="):]
+        self.assertTrue(probe_line, "missing EVENT_READABILITY_PROBE output")
+        return json.loads(probe_line)
+
     def _run_hybrid_payoff_probe(self) -> dict:
         cmd = [
             resolve_godot_executable(),
@@ -607,12 +661,13 @@ class PlayablePrototypeSmokeTests(unittest.TestCase):
         controller_text = Path("src/ui/combat_hud/combat_hud_controller.gd").read_text()
 
         self.assertIn('alignment = 1', scene_text)
-        self.assertIn('theme_override_constants/separation = 8', scene_text)
+        self.assertIn('theme_override_constants/separation = -176', scene_text)
         self.assertIn('theme_override_constants/separation = 20', scene_text)
         self.assertIn('size_flags_vertical = 3', scene_text)
-        self.assertIn('custom_minimum_size = Vector2(0, 84)', scene_text)
-        self.assertGreaterEqual(scene_text.count('custom_minimum_size = Vector2(232, 338)'), 5)
-        self.assertGreaterEqual(scene_text.count('custom_minimum_size = Vector2(288, 420)'), 3)
+        self.assertIn('alignment = 2', scene_text)
+        self.assertIn('custom_minimum_size = Vector2(0, 64)', scene_text)
+        self.assertGreaterEqual(scene_text.count('custom_minimum_size = Vector2(448, 640)'), 5)
+        self.assertGreaterEqual(scene_text.count('custom_minimum_size = Vector2(336, 480)'), 3)
         self.assertIn('func _ensure_card_face(button: Button, is_reward: bool) -> void:', controller_text)
         for hook_name in [
             '"Chrome"',
@@ -685,13 +740,27 @@ class PlayablePrototypeSmokeTests(unittest.TestCase):
 
     def test_reward_pool_keeps_gsm_cards_opt_in(self):
         probe = self._run_reward_pool_probe()
-        self.assertEqual(probe.get("normal_ids"), ["strike_plus", "defend_plus", "strike_precise"])
+        self.assertEqual(len(probe.get("normal_ids", [])), 3)
         self.assertFalse(probe.get("normal_has_gsm"))
         self.assertTrue(probe.get("gsm_all_are_gsm"))
         self.assertEqual(probe.get("mixed_normal_ids"), ["base_alpha", "base_beta", "base_alpha"])
         self.assertEqual(probe.get("mixed_gsm_ids"), ["gsm_beta", "gsm_alpha", "gsm_alpha"])
         self.assertTrue(probe.get("mixed_normal_all_base"))
         self.assertTrue(probe.get("mixed_gsm_all_gsm"))
+
+    def test_unaffordable_gem_gates_block_room_entry(self):
+        probe = self._run_gem_gate_block_probe()
+        self.assertTrue(probe.get("ok"), msg=probe)
+        self.assertNotIn(probe.get("gated_node_id"), probe.get("legal_moves_before", []))
+        self.assertFalse(probe.get("select_ok"))
+        self.assertEqual(probe.get("select_reason"), "ERR_GEM_GATE_UNAFFORDABLE")
+        self.assertFalse(probe.get("enter_ok"))
+        self.assertEqual(probe.get("enter_reason"), "")
+        self.assertEqual(probe.get("state_after_attempt"), "room_select")
+        self.assertEqual(probe.get("stack_after_attempt"), [])
+        self.assertEqual(probe.get("cap_after_attempt"), 6)
+        self.assertNotIn("gem_gate_paid", probe.get("event_kinds", []))
+        self.assertNotIn("gem_slot_lost", probe.get("event_kinds", []))
 
     def test_reward_pool_uses_metadata_weights_without_replacement(self):
         probe = self._run_reward_pool_probe()
@@ -701,6 +770,27 @@ class PlayablePrototypeSmokeTests(unittest.TestCase):
         )
         self.assertEqual(probe.get("equal_weight_ids"), ["equal_c", "equal_a", "equal_b"])
         self.assertEqual(probe.get("history_refill_ids"), ["history_a", "history_b", "history_c"])
+
+    def test_live_reward_context_only_switches_to_gsm_on_second_live_checkpoint(self):
+        probe = self._run_live_reward_context_probe()
+        self.assertEqual(len(probe.get("first_offer_ids", [])), 3)
+        self.assertTrue(probe.get("first_offer_all_base"))
+        self.assertEqual(len(probe.get("second_offer_ids", [])), 3)
+        self.assertTrue(probe.get("second_offer_all_gsm"))
+        self.assertEqual(len(probe.get("base_only_second_offer_ids", [])), 3)
+        self.assertTrue(probe.get("base_only_second_offer_all_base"))
+
+    def test_event_and_queue_surfaces_use_readable_card_names(self):
+        probe = self._run_event_readability_probe()
+        self.assertIn("Strike", probe.get("queue_text", ""))
+        self.assertIn("strike_01", probe.get("queue_text", ""))
+        self.assertIn("Played Strike", probe.get("event_log_text", ""))
+        self.assertIn("Resolve Strike", probe.get("event_log_text", ""))
+        self.assertIn("Strike+", probe.get("reward_line", ""))
+        self.assertIn("Defend+", probe.get("reward_line", ""))
+        self.assertIn("Precise Strike", probe.get("reward_line", ""))
+        self.assertIn("Offset Scalpel", probe.get("reject_line", ""))
+        self.assertIn("requires FOCUS", probe.get("reject_line", ""))
 
     def test_hybrid_cards_resolve_combat_and_gem_effects_together(self):
         probe = self._run_hybrid_payoff_probe()

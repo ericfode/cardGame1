@@ -4,6 +4,8 @@ class_name CombatHudController
 const PANEL_BG := Color("#171b24")
 const PANEL_BG_SOFT := Color("#202838")
 const PANEL_BORDER := Color("#4b5876")
+const HAND_PANEL_BG := Color("#101722")
+const HAND_PANEL_BORDER := Color("#b9985a")
 const TEXT_PRIMARY := Color("#f3f6fb")
 const TEXT_MUTED := Color("#d0d8e4")
 const TEXT_ACCENT := Color("#7ec6ff")
@@ -26,13 +28,13 @@ const ALT_DEFEND_BG := Color("#15384a")
 const ALT_DEFEND_BORDER := Color("#8de2ff")
 const ALT_OTHER_BG := Color("#27412a")
 const ALT_OTHER_BORDER := Color("#9af2a9")
-const HAND_CARD_SIZE := Vector2(232, 338)
-const REWARD_CARD_SIZE := Vector2(288, 420)
-const HAND_ART_FACE_SIZE := Vector2(184, 110)
-const REWARD_ART_FACE_SIZE := Vector2(224, 140)
-const HAND_ROLE_FACE_SIZE := Vector2(30, 30)
-const REWARD_ROLE_FACE_SIZE := Vector2(36, 36)
-const HAND_HOVER_SCALE := 1.55
+const HAND_CARD_SIZE := Vector2(448, 640)
+const REWARD_CARD_SIZE := Vector2(336, 480)
+const HAND_ART_FACE_SIZE := Vector2(376, 220)
+const REWARD_ART_FACE_SIZE := Vector2(276, 166)
+const HAND_ROLE_FACE_SIZE := Vector2(48, 48)
+const REWARD_ROLE_FACE_SIZE := Vector2(40, 40)
+const HAND_HOVER_SCALE := 1.5
 const REWARD_HOVER_SCALE := 1.22
 const CARD_BODY_CLASSIC := Color("#eadfc7")
 const CARD_BODY_ALT := Color("#ddd0b7")
@@ -125,9 +127,9 @@ func _connect_reward_buttons() -> void:
 		$RewardOverlay/Center/RewardPanel/RewardVBox/RewardContinue.pressed.connect(_on_reward_continue)
 
 func _apply_generated_art() -> void:
-	_apply_texture("Margin/VBox/Banner/BannerRow/BannerCrest", CREST_PATH, Vector2(40, 40), true)
-	_apply_texture("Margin/VBox/StatsRow/PlayerPanel/PlayerVBox/PlayerPortrait", PLAYER_PORTRAIT_PATH, Vector2(96, 96), false)
-	_apply_texture("Margin/VBox/StatsRow/EnemyPanel/EnemyVBox/EnemyPortrait", ENEMY_PORTRAIT_PATH, Vector2(88, 88), true)
+	_apply_texture("Margin/VBox/Banner/BannerRow/BannerCrest", CREST_PATH, Vector2(36, 36), true)
+	_apply_texture("Margin/VBox/StatsRow/PlayerPanel/PlayerVBox/PlayerPortrait", PLAYER_PORTRAIT_PATH, Vector2(80, 80), false)
+	_apply_texture("Margin/VBox/StatsRow/EnemyPanel/EnemyVBox/EnemyPortrait", ENEMY_PORTRAIT_PATH, Vector2(72, 72), true)
 	_apply_texture("RewardOverlay/Center/RewardPanel/RewardVBox/RewardSealRow/RewardSeal", REWARD_SEAL_PATH, Vector2(96, 96), false)
 
 func _apply_texture(path: String, resource_path: String, size: Vector2, pixel_art: bool = false) -> void:
@@ -137,7 +139,7 @@ func _apply_texture(path: String, resource_path: String, size: Vector2, pixel_ar
 	_apply_texture_rect(node, resource_path, size, pixel_art)
 
 func _apply_texture_rect(node: TextureRect, resource_path: String, size: Vector2, pixel_art: bool = false, show_missing: bool = true) -> void:
-	var texture := _load_texture(resource_path)
+	var texture := TextureLoader.try_load(resource_path)
 	node.custom_minimum_size = size
 	node.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	node.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
@@ -159,18 +161,6 @@ func _clear_texture_rect(node: TextureRect, size: Vector2, visible: bool = false
 	node.visible = visible
 	node.modulate = Color(1, 1, 1, 1)
 	node.tooltip_text = ""
-
-func _load_texture(resource_path: String) -> Texture2D:
-	if ResourceLoader.exists(resource_path):
-		var imported := load(resource_path)
-		if imported is Texture2D:
-			return imported
-	if not FileAccess.file_exists(resource_path):
-		return null
-	var image := Image.load_from_file(resource_path)
-	if image == null or image.is_empty():
-		return null
-	return ImageTexture.create_from_image(image)
 
 func _is_reward_button(button: Button) -> bool:
 	return str(button.name).begins_with("Reward")
@@ -259,54 +249,54 @@ func _apply_card_face_layout(button: Button, is_reward: bool) -> void:
 
 	if is_reward:
 		if chrome is Control:
-			_set_control_rect(chrome, 12.0, 12.0, 276.0, 408.0)
+			_set_control_rect(chrome, 12.0, 12.0, 324.0, 456.0)
 		if art_frame is Control:
-			_set_control_rect(art_frame, 22.0, 40.0, 266.0, 196.0)
+			_set_control_rect(art_frame, 22.0, 42.0, 314.0, 224.0)
 		if title_rail is Control:
-			_set_control_rect(title_rail, 22.0, 206.0, 266.0, 244.0)
+			_set_control_rect(title_rail, 22.0, 236.0, 314.0, 280.0)
 		if footer_strip is Control:
-			_set_control_rect(footer_strip, 20.0, 388.0, 268.0, 410.0)
+			_set_control_rect(footer_strip, 20.0, 446.0, 316.0, 470.0)
 		if hotkey_badge is Control:
-			_set_control_rect(hotkey_badge, 30.0, 14.0, 96.0, 38.0)
+			_set_control_rect(hotkey_badge, 30.0, 14.0, 100.0, 40.0)
 		if cost_badge is Control:
-			_set_control_rect(cost_badge, 190.0, 14.0, 260.0, 40.0)
+			_set_control_rect(cost_badge, 230.0, 14.0, 308.0, 42.0)
 		if art_thumb is Control:
-			_set_control_rect(art_thumb, 32.0, 48.0, 256.0, 188.0)
+			_set_control_rect(art_thumb, 30.0, 50.0, 306.0, 216.0)
 		if role_icon is Control:
-			_set_control_rect(role_icon, 28.0, 208.0, 64.0, 244.0)
+			_set_control_rect(role_icon, 28.0, 238.0, 68.0, 278.0)
 		if name_label is Control:
-			_set_control_rect(name_label, 72.0, 212.0, 260.0, 240.0)
+			_set_control_rect(name_label, 78.0, 242.0, 308.0, 274.0)
 		if payoff_label is Control:
-			_set_control_rect(payoff_label, 30.0, 258.0, 258.0, 288.0)
+			_set_control_rect(payoff_label, 30.0, 296.0, 306.0, 332.0)
 		if rules_label is Control:
-			_set_control_rect(rules_label, 30.0, 300.0, 258.0, 378.0)
+			_set_control_rect(rules_label, 30.0, 344.0, 306.0, 432.0)
 		if footer_label is Control:
-			_set_control_rect(footer_label, 30.0, 388.0, 258.0, 410.0)
+			_set_control_rect(footer_label, 30.0, 446.0, 306.0, 470.0)
 	else:
 		if chrome is Control:
-			_set_control_rect(chrome, 10.0, 10.0, 222.0, 328.0)
+			_set_control_rect(chrome, 12.0, 12.0, 436.0, 628.0)
 		if art_frame is Control:
-			_set_control_rect(art_frame, 18.0, 34.0, 214.0, 154.0)
+			_set_control_rect(art_frame, 24.0, 40.0, 424.0, 272.0)
 		if title_rail is Control:
-			_set_control_rect(title_rail, 18.0, 164.0, 214.0, 198.0)
+			_set_control_rect(title_rail, 24.0, 286.0, 424.0, 338.0)
 		if footer_strip is Control:
-			_set_control_rect(footer_strip, 16.0, 308.0, 216.0, 328.0)
+			_set_control_rect(footer_strip, 20.0, 606.0, 428.0, 634.0)
 		if hotkey_badge is Control:
-			_set_control_rect(hotkey_badge, 24.0, 12.0, 66.0, 32.0)
+			_set_control_rect(hotkey_badge, 30.0, 16.0, 102.0, 44.0)
 		if cost_badge is Control:
-			_set_control_rect(cost_badge, 160.0, 12.0, 214.0, 34.0)
+			_set_control_rect(cost_badge, 320.0, 16.0, 424.0, 44.0)
 		if art_thumb is Control:
-			_set_control_rect(art_thumb, 24.0, 40.0, 208.0, 150.0)
+			_set_control_rect(art_thumb, 30.0, 50.0, 406.0, 270.0)
 		if role_icon is Control:
-			_set_control_rect(role_icon, 22.0, 166.0, 52.0, 196.0)
+			_set_control_rect(role_icon, 28.0, 290.0, 76.0, 338.0)
 		if name_label is Control:
-			_set_control_rect(name_label, 58.0, 168.0, 212.0, 194.0)
+			_set_control_rect(name_label, 88.0, 294.0, 422.0, 334.0)
 		if payoff_label is Control:
-			_set_control_rect(payoff_label, 22.0, 206.0, 212.0, 234.0)
+			_set_control_rect(payoff_label, 28.0, 360.0, 422.0, 408.0)
 		if rules_label is Control:
-			_set_control_rect(rules_label, 22.0, 242.0, 212.0, 300.0)
+			_set_control_rect(rules_label, 28.0, 424.0, 422.0, 592.0)
 		if footer_label is Control:
-			_set_control_rect(footer_label, 22.0, 308.0, 212.0, 328.0)
+			_set_control_rect(footer_label, 28.0, 606.0, 422.0, 632.0)
 
 func _apply_readability_theme() -> void:
 	for path in [
@@ -326,18 +316,22 @@ func _apply_readability_theme() -> void:
 		if node is PanelContainer:
 			_apply_panel_style(node)
 
-	_apply_label_style("Margin/VBox/Banner/BannerRow/Title", 30, TEXT_PRIMARY)
-	_apply_label_style("Margin/VBox/Banner/BannerRow/Status", 22, TEXT_ACCENT)
-	_apply_label_style("Margin/VBox/Banner/BannerRow/ResolveLock", 20, TEXT_GOOD)
-	_apply_label_style("Margin/VBox/StatsRow/PlayerPanel/PlayerVBox/PlayerStats", 22, TEXT_PRIMARY)
-	_apply_label_style("Margin/VBox/StatsRow/EnemyPanel/EnemyVBox/EnemyStats", 22, TEXT_PRIMARY)
-	_apply_label_style("Margin/VBox/StatsRow/ZonesPanel/Zones", 18, TEXT_MUTED)
+	var hand_panel_node := get_node_or_null("Margin/VBox/HandPanel")
+	if hand_panel_node is PanelContainer:
+		_apply_hand_panel_style(hand_panel_node)
+
+	_apply_label_style("Margin/VBox/Banner/BannerRow/Title", 28, TEXT_PRIMARY)
+	_apply_label_style("Margin/VBox/Banner/BannerRow/Status", 20, TEXT_ACCENT)
+	_apply_label_style("Margin/VBox/Banner/BannerRow/ResolveLock", 18, TEXT_GOOD)
+	_apply_label_style("Margin/VBox/StatsRow/PlayerPanel/PlayerVBox/PlayerStats", 20, TEXT_PRIMARY)
+	_apply_label_style("Margin/VBox/StatsRow/EnemyPanel/EnemyVBox/EnemyStats", 20, TEXT_PRIMARY)
+	_apply_label_style("Margin/VBox/StatsRow/ZonesPanel/Zones", 16, TEXT_MUTED)
 	_apply_label_style("Margin/VBox/StatsRow/GeneratedStatusPanel/GeneratedStatusVBox/GeneratedStatusLabel", 16, TEXT_ACCENT)
 	_apply_label_style("Margin/VBox/StatsRow/GeneratedStatusPanel/GeneratedStatusVBox/GeneratedStatusStrip/FocusValue", 20, TEXT_PRIMARY)
-	_apply_label_style("Margin/VBox/QueuePanel/Queue", 18, TEXT_MUTED)
-	_apply_label_style("Margin/VBox/ReasonPanel/Hint", 18, TEXT_PRIMARY)
+	_apply_label_style("Margin/VBox/QueuePanel/Queue", 16, TEXT_MUTED)
+	_apply_label_style("Margin/VBox/ReasonPanel/Hint", 16, TEXT_PRIMARY)
 	_apply_label_style("Margin/VBox/HandPanel/HandVBox/Hand", 24, TEXT_ACCENT)
-	_apply_label_style("Margin/VBox/EventPanel/EventLog", 18, TEXT_MUTED)
+	_apply_label_style("Margin/VBox/EventPanel/EventLog", 16, TEXT_MUTED)
 	_apply_label_style("RewardOverlay/Center/RewardPanel/RewardVBox/RewardTitle", 30, TEXT_PRIMARY)
 	_apply_label_style("RewardOverlay/Center/RewardPanel/RewardVBox/RewardSubtitle", 22, TEXT_MUTED)
 	_apply_label_style("RewardOverlay/Center/RewardPanel/RewardVBox/RewardState", 22, TEXT_PRIMARY)
@@ -348,11 +342,11 @@ func _apply_readability_theme() -> void:
 	_apply_progress_bar_style("Margin/VBox/StatsRow/EnemyPanel/EnemyVBox/EnemyHpBar", ENEMY_FILL)
 
 	if has_node("Margin/VBox/Buttons/Pass"):
-		_apply_neutral_button_style($Margin/VBox/Buttons/Pass, 22, 60)
+		_apply_neutral_button_style($Margin/VBox/Buttons/Pass, 20, 48)
 	if has_node("Margin/VBox/Buttons/Restart"):
-		_apply_neutral_button_style($Margin/VBox/Buttons/Restart, 22, 60)
+		_apply_neutral_button_style($Margin/VBox/Buttons/Restart, 20, 48)
 	if has_node("RewardOverlay/Center/RewardPanel/RewardVBox/RewardContinue"):
-		_apply_neutral_button_style($RewardOverlay/Center/RewardPanel/RewardVBox/RewardContinue, 22, 60)
+		_apply_neutral_button_style($RewardOverlay/Center/RewardPanel/RewardVBox/RewardContinue, 20, 48)
 
 func _apply_panel_style(panel: PanelContainer) -> void:
 	var style := StyleBoxFlat.new()
@@ -370,6 +364,26 @@ func _apply_panel_style(panel: PanelContainer) -> void:
 	style.content_margin_top = 12
 	style.content_margin_right = 14
 	style.content_margin_bottom = 12
+	panel.add_theme_stylebox_override("panel", style)
+
+func _apply_hand_panel_style(panel: PanelContainer) -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = HAND_PANEL_BG
+	style.border_color = HAND_PANEL_BORDER
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.corner_radius_top_left = 16
+	style.corner_radius_top_right = 16
+	style.corner_radius_bottom_right = 18
+	style.corner_radius_bottom_left = 18
+	style.shadow_color = Color(0, 0, 0, 0.35)
+	style.shadow_size = 14
+	style.content_margin_left = 18
+	style.content_margin_top = 10
+	style.content_margin_right = 18
+	style.content_margin_bottom = 10
 	panel.add_theme_stylebox_override("panel", style)
 
 func _build_button_style(bg_color: Color, border_color: Color) -> StyleBoxFlat:
@@ -697,12 +711,12 @@ func _apply_card_face_style(button: Button, card_id: String, footer_text: String
 	_apply_face_panel_override(button, "ArtFrame", CARD_FRAME_BG, CARD_FRAME_BORDER, 1, 8)
 	_apply_face_panel_override(button, "TitleRail", title_bg, accent, 1, 7)
 	_apply_face_panel_override(button, "FooterStrip", footer_bg, accent, 1, 7)
-	_apply_face_label_override(button, "HotkeyBadge", 15 if not is_reward else 17, badge_color, HORIZONTAL_ALIGNMENT_LEFT, false)
-	_apply_face_label_override(button, "CostBadge", 15 if not is_reward else 18, badge_color, HORIZONTAL_ALIGNMENT_RIGHT, false)
-	_apply_face_label_override(button, "NameLabel", 19 if not is_reward else 22, title_text_color, HORIZONTAL_ALIGNMENT_LEFT, false)
-	_apply_face_label_override(button, "PayoffLabel", 17 if not is_reward else 20, payoff_color, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_apply_face_label_override(button, "RulesLabel", 13 if not is_reward else 15, body_text_color, HORIZONTAL_ALIGNMENT_LEFT, true)
-	_apply_face_label_override(button, "FooterLabel", 12 if not is_reward else 14, footer_text_color, HORIZONTAL_ALIGNMENT_LEFT, false)
+	_apply_face_label_override(button, "HotkeyBadge", 20 if not is_reward else 18, badge_color, HORIZONTAL_ALIGNMENT_LEFT, false)
+	_apply_face_label_override(button, "CostBadge", 20 if not is_reward else 19, badge_color, HORIZONTAL_ALIGNMENT_RIGHT, false)
+	_apply_face_label_override(button, "NameLabel", 28 if not is_reward else 24, title_text_color, HORIZONTAL_ALIGNMENT_LEFT, false)
+	_apply_face_label_override(button, "PayoffLabel", 22 if not is_reward else 21, payoff_color, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_apply_face_label_override(button, "RulesLabel", 17 if not is_reward else 16, body_text_color, HORIZONTAL_ALIGNMENT_LEFT, true)
+	_apply_face_label_override(button, "FooterLabel", 15 if not is_reward else 15, footer_text_color, HORIZONTAL_ALIGNMENT_LEFT, false)
 
 func _refresh_card_face(button: Button, card_id: String, slot_index: int, footer_text: String, disabled: bool) -> void:
 	var is_reward: bool = _is_reward_button(button)
@@ -1105,13 +1119,15 @@ func _player_stats_text(vm: Dictionary) -> String:
 	]
 
 func _enemy_stats_text(vm: Dictionary) -> String:
-	var intent_style: String = str(vm.get("encounter_intent_style", "Steady pressure"))
-	return "ENEMY  HP %d/%d  •  Block %d  •  Intent %d dmg\nPattern: %s" % [
+	var profile_name: String = str(vm.get("pressure_profile_name", "Steady Pressure"))
+	var intent: Dictionary = vm.get("enemy_intent", {})
+	var telegraph: String = str(intent.get("telegraph_text", "Attack for %d" % int(vm.get("enemy_intent_damage", 0))))
+	return "ENEMY  HP %d/%d  •  Block %d\nIntent: %s\nPattern: %s" % [
 		int(vm.get("enemy_hp", 0)),
 		int(vm.get("enemy_max_hp", 0)),
 		int(vm.get("enemy_block", 0)),
-		int(vm.get("enemy_intent_damage", 0)),
-		intent_style,
+		telegraph,
+		profile_name,
 	]
 
 func _zones_text(vm: Dictionary) -> String:
@@ -1136,12 +1152,23 @@ func _zones_text(vm: Dictionary) -> String:
 		lines.append("Gem Top %s" % " -> ".join(gems))
 	return _join_lines(lines)
 
+func _queue_item_source_text(item: Dictionary) -> String:
+	var source_instance_id: String = str(item.get("source_instance_id", "")).strip_edges()
+	var card_id: String = str(item.get("card_id", source_instance_id)).strip_edges()
+	if card_presenter != null and card_id != "":
+		var display_name: String = card_presenter.display_name(card_id)
+		if source_instance_id != "" and source_instance_id != card_id and source_instance_id != display_name:
+			return "%s [%s]" % [display_name, source_instance_id]
+		if display_name != "":
+			return display_name
+	return source_instance_id if source_instance_id != "" else card_id
+
 func _queue_text(vm: Dictionary) -> String:
 	var queue_preview: Array = vm.get("queue_preview", [])
 	if not queue_preview.is_empty():
 		var item: Dictionary = queue_preview[0]
 		return "NEXT RESOLVE\n%s\nComparator: timing %d -> speed %d -> seq %d" % [
-			str(item.get("source_instance_id", "-")),
+			_queue_item_source_text(item),
 			int(item.get("timing_window_priority", 0)),
 			int(item.get("speed_class_priority", 0)),
 			int(item.get("enqueue_sequence_id", 0)),
@@ -1150,7 +1177,7 @@ func _queue_text(vm: Dictionary) -> String:
 	var last_item: Dictionary = vm.get("last_resolved_queue_item", {})
 	if not last_item.is_empty():
 		return "LAST RESOLVE\n%s\nComparator: timing %d -> speed %d -> seq %d" % [
-			str(last_item.get("source_instance_id", "-")),
+			_queue_item_source_text(last_item),
 			int(last_item.get("timing_window_priority", 0)),
 			int(last_item.get("speed_class_priority", 0)),
 			int(last_item.get("enqueue_sequence_id", 0)),
@@ -1187,7 +1214,7 @@ func _hand_text(vm: Dictionary) -> String:
 	if mappings.is_empty():
 		mappings.append("1-5=(empty)")
 	mappings.append("Enter=End Turn")
-	return "HAND • %d cards\nHotkeys: %s\nStyle: %s (V toggle)" % [hand.size(), " • ".join(mappings), _card_style_label()]
+	return "HAND • %d cards • Style: %s (V toggle)\nHotkeys: %s" % [hand.size(), _card_style_label(), " • ".join(mappings)]
 
 func _event_log_text(vm: Dictionary) -> String:
 	var lines: Array = vm.get("recent_events", [])
@@ -1363,11 +1390,11 @@ func _refresh_card_button_visuals(button: Button, card_id: String) -> void:
 func _card_art_path(card_id: String) -> String:
 	var canonical_card_id: String = _canonical_card_id(card_id)
 	match canonical_card_id:
-		"strike", "strike_plus", "strike_precise":
+		"strike", "strike_plus", "strike_precise", "quick_slash":
 			return CARD_ART_STRIKE_PATH
-		"defend", "defend_plus", "defend_hold":
+		"defend", "defend_plus", "defend_hold", "heavy_guard":
 			return CARD_ART_DEFEND_PATH
-		"scheme_flow":
+		"scheme_flow", "steady_hand":
 			return CARD_ART_UTILITY_PATH
 		"gem_produce_ruby", "gem_hybrid_ruby_strike", "gem_consume_top_ruby", "gem_offset_consume_ruby":
 			return CARD_ART_RUBY_PATH

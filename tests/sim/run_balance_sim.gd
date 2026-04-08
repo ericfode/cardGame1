@@ -12,13 +12,17 @@ const DEFAULT_INPUT := {
 
 const POLICY_PATHS := {
 	"random_legal": "res://tests/sim/policies/policy_random_legal.gd",
+	"greedy_value": "res://tests/sim/policies/policy_greedy_value.gd",
+	"sequencing_aware_v1": "res://tests/sim/policies/policy_sequencing_aware_v1.gd",
 }
 
 const CARD_CATALOG_SCRIPT := preload("res://src/core/card/card_catalog.gd")
 
 func _init() -> void:
 	var input_payload: Dictionary = _load_input_payload()
-	var policy: Variant = _load_policy(str(input_payload.get("policy_id", "random_legal")))
+	var policy_bundle: Dictionary = _load_policy(str(input_payload.get("policy_id", "random_legal")))
+	var policy: Variant = policy_bundle.get("instance")
+	var runtime_policy_id: String = str(policy_bundle.get("runtime_id", "random_legal"))
 
 	var scene: PackedScene = load("res://scenes/combat/combat_slice.tscn")
 	var node: Node = scene.instantiate()
@@ -31,7 +35,7 @@ func _init() -> void:
 
 	_run_simulation(node, policy, int(input_payload.get("max_turns", 12)))
 
-	var report: Dictionary = _build_report(node, input_payload)
+	var report: Dictionary = _build_report(node, input_payload, runtime_policy_id)
 	print("BALANCE_SIM_REPORT=" + JSON.stringify(report))
 	quit()
 
@@ -57,10 +61,19 @@ func _load_input_payload() -> Dictionary:
 		payload[key] = parsed[key]
 	return payload
 
-func _load_policy(policy_id: String) -> Variant:
-	var path: String = str(POLICY_PATHS.get(policy_id, POLICY_PATHS["random_legal"]))
+func _load_policy(policy_id: String) -> Dictionary:
+	var resolved_policy_id: String = policy_id
+	if not POLICY_PATHS.has(resolved_policy_id):
+		resolved_policy_id = "random_legal"
+	var path: String = str(POLICY_PATHS.get(resolved_policy_id, POLICY_PATHS["random_legal"]))
 	var script: Script = load(path)
-	return script.new()
+	var instance: Variant = script.new()
+	if instance.has_method("get_policy_id"):
+		resolved_policy_id = str(instance.call("get_policy_id"))
+	return {
+		"instance": instance,
+		"runtime_id": resolved_policy_id,
+	}
 
 func _apply_deck_if_provided(node: Node, input_payload: Dictionary) -> void:
 	var provided: Array = input_payload.get("deck_list", [])
@@ -107,7 +120,7 @@ func _run_simulation(node: Node, policy: Variant, max_turns: int) -> void:
 	if step_count >= step_cap:
 		node.set("combat_result", "timeout")
 
-func _build_report(node: Node, input_payload: Dictionary) -> Dictionary:
+func _build_report(node: Node, input_payload: Dictionary, runtime_policy_id: String) -> Dictionary:
 	var vm: Dictionary = node.call("get_view_model")
 	var event_stream: Array = node.get("event_stream")
 	var card_catalog = CARD_CATALOG_SCRIPT.new()
@@ -135,6 +148,7 @@ func _build_report(node: Node, input_payload: Dictionary) -> Dictionary:
 		"simulation_id": str(input_payload.get("simulation_id", "sim_default")),
 		"seed_root": int(input_payload.get("seed_root", 13371337)),
 		"policy_id": str(input_payload.get("policy_id", "random_legal")),
+		"policy_runtime_id": runtime_policy_id,
 		"enemy_profile_id": str(input_payload.get("enemy_profile_id", "default")),
 		"result": str(vm.get("combat_result", "timeout")),
 		"turns_completed": int(vm.get("turn", 0)),

@@ -12,11 +12,24 @@ const REWARD_DRAFT_SCRIPT := preload("res://src/core/reward/reward_draft.gd")
 const CARD_CATALOG_SCRIPT := preload("res://src/core/card/card_catalog.gd")
 const CARD_PRESENTER_SCRIPT := preload("res://src/core/card/card_presenter.gd")
 const CARD_INSTANCE_SCRIPT := preload("res://src/core/card/card_instance.gd")
+const STATUS_TRACKER_SCRIPT := preload("res://src/core/status/status_tracker.gd")
 
+const PRESSURE_PROFILES_PATH := "res://data/encounters/pressure_profiles_v1.json"
 const PLAYER_MAX_HP := 40
-const ENEMY_MAX_HP := 24
+const DEFAULT_ENEMY_MAX_HP := 24
 const HAND_SIZE_TARGET := 5
 const TURN_ENERGY := 3
+
+## Combat result states
+const RESULT_IN_PROGRESS := "in_progress"
+const RESULT_PLAYER_WIN := "player_win"
+const RESULT_PLAYER_LOSE := "player_lose"
+
+## Reward lifecycle states
+const REWARD_NONE := "none"
+const REWARD_PRESENTED := "presented"
+const REWARD_APPLIED := "applied"
+const REWARD_CLOSED := "closed"
 
 const FIXTURE_STARTER_RUN_DECK := [
 	"strike_01", "strike_02", "defend_01", "strike_03", "defend_02",
@@ -37,19 +50,28 @@ var hud: Variant
 
 var event_stream: Array[Dictionary] = []
 var effect_resolve_draw_annotations: Dictionary = {}
+var pressure_profiles: Dictionary = {}
+var encounter_sequence: Array = []
 
 var player_hp: int = PLAYER_MAX_HP
 var player_block: int = 0
-var enemy_hp: int = ENEMY_MAX_HP
+var enemy_max_hp: int = DEFAULT_ENEMY_MAX_HP
+var enemy_hp: int = DEFAULT_ENEMY_MAX_HP
 var enemy_block: int = 0
 var energy: int = TURN_ENERGY
-var enemy_intent_damage: int = 6
-var combat_result: String = "in_progress"
+var enemy_intent: Dictionary = {}
+var combat_result: String = RESULT_IN_PROGRESS
+var active_profile: Dictionary = {}
+var cycle_step: int = 0
+var floor_runner: Variant = null
+var use_external_gsm: bool = false
+var player_statuses: Variant = null
+var enemy_statuses: Variant = null
 var last_event_text: String = "Battle ready"
 var last_reject_reason: String = ""
 var last_resolved_queue_item: Dictionary = {}
 var run_master_deck: Array = []
-var reward_state: String = "none"
+var reward_state: String = REWARD_NONE
 var reward_checkpoint_id: String = ""
 var reward_draft_instance_id: String = ""
 var reward_offer: Array[Dictionary] = []
@@ -71,32 +93,45 @@ func _ready() -> void:
 	card_instance = CARD_INSTANCE_SCRIPT.new()
 	reward_draft = REWARD_DRAFT_SCRIPT.new()
 	reward_draft.set_card_catalog(card_catalog)
+	_load_pressure_profiles()
 	hud = $CombatHud
 	hud.bind_runner(self)
-	reset_battle(13371337)
+	# Don't auto-start if we're a child of a floor runner
+	var parent_node: Node = get_parent()
+	if parent_node != null and parent_node.has_method("on_combat_complete"):
+		floor_runner = parent_node
+		use_external_gsm = false  # Will be set true when floor launches combat
+	else:
+		reset_battle(13371337)
 
 func reset_battle(seed_root: int = 13371337) -> void:
 	rng.bootstrap(seed_root)
 	event_stream.clear()
 	effect_resolve_draw_annotations.clear()
-	gsm = GSM_SCRIPT.new()
+	if not use_external_gsm:
+		gsm = GSM_SCRIPT.new()
+	player_statuses = STATUS_TRACKER_SCRIPT.new()
+	enemy_statuses = STATUS_TRACKER_SCRIPT.new()
 
 	tsre.phase = tsre.PHASE_TURN_START
 	tsre.turn_index = 1
 	tsre.phase_index = 0
 	tsre.resolve_lock = false
 
+	active_profile = _profile_for_encounter(encounter_index)
+	cycle_step = 0
+	enemy_max_hp = int(active_profile.get("enemy_hp_base", DEFAULT_ENEMY_MAX_HP))
 	player_hp = PLAYER_MAX_HP
 	player_block = 0
-	enemy_hp = ENEMY_MAX_HP
+	enemy_hp = enemy_max_hp
 	enemy_block = 0
 	energy = TURN_ENERGY
-	combat_result = "in_progress"
+	combat_result = RESULT_IN_PROGRESS
 	last_event_text = "Battle ready"
 	last_reject_reason = ""
 	last_resolved_queue_item = {}
 	run_master_deck = card_catalog.starter_run_deck()
-	reward_state = "none"
+	reward_state = REWARD_NONE
 	reward_checkpoint_id = ""
 	reward_draft_instance_id = ""
 	reward_offer = []
@@ -104,11 +139,16 @@ func reset_battle(seed_root: int = 13371337) -> void:
 	reward_summary_text = ""
 	reward_checkpoint_count = 0
 	reward_commit_count = 0
-	encounter_index = 1
+	if not use_external_gsm:
+		encounter_index = 1
 
 	_bootstrap_demo_state()
-	enemy_intent_damage = _roll_enemy_intent_damage()
-	_record_event("encounter_start", {"encounter_index": encounter_index, "turn": tsre.turn_index})
+	enemy_intent = _roll_enemy_intent()
+	_record_event("encounter_start", {
+		"encounter_index": encounter_index,
+		"turn": tsre.turn_index,
+		"profile_id": str(active_profile.get("profile_id", "steady")),
+	})
 	refresh_hud()
 
 func _bootstrap_demo_state() -> void:
@@ -130,11 +170,14 @@ func get_view_model() -> Dictionary:
 		"player_max_hp": PLAYER_MAX_HP,
 		"player_block": player_block,
 		"enemy_hp": enemy_hp,
-		"enemy_max_hp": ENEMY_MAX_HP,
+		"enemy_max_hp": enemy_max_hp,
 		"enemy_block": enemy_block,
 		"energy": energy,
 		"turn_energy_max": TURN_ENERGY,
-		"enemy_intent_damage": enemy_intent_damage,
+		"enemy_intent_damage": int(enemy_intent.get("damage", 0)),
+		"enemy_intent": enemy_intent.duplicate(true),
+		"pressure_profile_id": str(active_profile.get("profile_id", "steady")),
+		"pressure_profile_name": str(active_profile.get("display_name", "Steady Pressure")),
 		"hand": _zone_instance_ids(dls.hand),
 		"hand_card_ids": _zone_card_ids(dls.hand),
 		"hand_play_reasons": _zone_play_reasons(dls.hand),
@@ -168,9 +211,15 @@ func get_view_model() -> Dictionary:
 		"encounter_intro_flavor": _encounter_intro_flavor(),
 		"combat_result": combat_result,
 		"last_event_text": last_event_text,
+		"player_statuses": player_statuses.snapshot() if player_statuses != null else [],
+		"enemy_statuses": enemy_statuses.snapshot() if enemy_statuses != null else [],
 	}
 
 func refresh_hud() -> void:
+	if hud == null:
+		hud = get_node_or_null("CombatHud")
+		if hud != null:
+			hud.bind_runner(self)
 	if hud != null:
 		hud.refresh(get_view_model())
 
@@ -253,68 +302,259 @@ func player_pass() -> Dictionary:
 	tsre.transition_to(tsre.PHASE_ENEMY)
 	_enemy_take_turn()
 	_check_combat_end()
-	if combat_result == "in_progress":
+	if combat_result == RESULT_IN_PROGRESS:
 		_start_next_turn()
 	refresh_hud()
 	return {"ok": true}
 
 func _enemy_take_turn() -> void:
-	var incoming: int = enemy_intent_damage
+	var intent_type: String = str(enemy_intent.get("intent_type", "attack"))
+	var raw_incoming: int = int(enemy_intent.get("damage", 0))
+	# Apply enemy's outgoing damage multiplier and player's incoming multiplier
+	var enemy_deal: float = enemy_statuses.get_damage_dealt_multiplier() if enemy_statuses != null else 1.0
+	var player_take: float = player_statuses.get_damage_taken_multiplier() if player_statuses != null else 1.0
+	var incoming: int = max(0, int(float(raw_incoming) * enemy_deal * player_take))
 	var blocked: int = min(player_block, incoming)
 	player_block -= blocked
 	var hp_loss: int = max(0, incoming - blocked)
 	player_hp = max(0, player_hp - hp_loss)
-	_record_event("enemy_attack", {
+
+	var event_payload: Dictionary = {
+		"intent_type": intent_type,
 		"incoming": incoming,
 		"blocked": blocked,
 		"hp_loss": hp_loss,
 		"player_hp_after": player_hp,
-	})
+	}
+
+	var block_gain: int = int(enemy_intent.get("block_gain", 0))
+	if block_gain > 0:
+		enemy_block += block_gain
+		event_payload["enemy_block_gain"] = block_gain
+
+	var energy_drain_amount: int = int(enemy_intent.get("energy_drain", 0))
+	if energy_drain_amount > 0:
+		event_payload["energy_drain"] = energy_drain_amount
+
+	var discard_count: int = int(enemy_intent.get("discard_count", 0))
+	if discard_count > 0:
+		var discarded: Array = _force_discard_random(discard_count)
+		event_payload["force_discarded"] = discarded
+
+	# Enemy-applied status effects
+	var apply_status_id: String = str(enemy_intent.get("apply_status", ""))
+	if apply_status_id != "" and player_statuses != null:
+		var stacks: int = int(enemy_intent.get("status_stacks", 1))
+		player_statuses.apply(apply_status_id, stacks)
+		event_payload["applied_status"] = apply_status_id
+		event_payload["status_stacks"] = stacks
+
+	_record_event("enemy_attack", event_payload)
+
+func _force_discard_random(count: int) -> Array:
+	var discarded: Array = []
+	for _i in range(count):
+		if dls.hand.is_empty():
+			break
+		var draw: Dictionary = rng.draw_next("encounter.targeting")
+		var idx: int = int(draw.get("value", 0)) % dls.hand.size()
+		var card: Dictionary = dls.hand.pop_at(idx)
+		dls.discard_pile.append(card)
+		discarded.append(_card_instance_id(card))
+	return discarded
 
 func _start_next_turn() -> void:
+	# Tick durations at turn end
+	if player_statuses != null:
+		player_statuses.tick_turn_end()
+	if enemy_statuses != null:
+		enemy_statuses.tick_turn_end()
+
 	tsre.transition_to(tsre.PHASE_TURN_END)
 	tsre.turn_index += 1
 	tsre.transition_to(tsre.PHASE_TURN_START)
+
+	# Tick turn-start effects (poison)
+	if player_statuses != null:
+		var player_ticks: Array = player_statuses.tick_turn_start()
+		for tick in player_ticks:
+			var tick_dmg: int = int(tick.get("damage", 0))
+			if tick_dmg > 0:
+				player_hp = max(0, player_hp - tick_dmg)
+				_record_event("status_tick", {"target": "player", "effect_id": str(tick.get("effect_id", "")), "damage": tick_dmg, "player_hp_after": player_hp})
+	if enemy_statuses != null:
+		var enemy_ticks: Array = enemy_statuses.tick_turn_start()
+		for tick in enemy_ticks:
+			var tick_dmg: int = int(tick.get("damage", 0))
+			if tick_dmg > 0:
+				enemy_hp = max(0, enemy_hp - tick_dmg)
+				_record_event("status_tick", {"target": "enemy", "effect_id": str(tick.get("effect_id", "")), "damage": tick_dmg, "enemy_hp_after": enemy_hp})
+
 	player_block = 0
 	energy = TURN_ENERGY
+	var energy_drain_amount: int = int(enemy_intent.get("energy_drain", 0))
+	if energy_drain_amount > 0:
+		energy = max(0, energy - energy_drain_amount)
 	while dls.hand.size() < HAND_SIZE_TARGET:
 		var drawn = dls.draw_one()
 		if drawn == null:
 			break
-	enemy_intent_damage = _roll_enemy_intent_damage()
-	_record_event("turn_start", {"turn": tsre.turn_index, "enemy_intent_damage": enemy_intent_damage})
+	enemy_intent = _roll_enemy_intent()
+	var turn_start_payload: Dictionary = {
+		"turn": tsre.turn_index,
+		"enemy_intent_damage": int(enemy_intent.get("damage", 0)),
+		"enemy_intent_type": str(enemy_intent.get("intent_type", "attack")),
+	}
+	if energy_drain_amount > 0:
+		turn_start_payload["energy_drained"] = energy_drain_amount
+		turn_start_payload["energy_after_drain"] = energy
+	_record_event("turn_start", turn_start_payload)
 
-func _roll_enemy_intent_damage() -> int:
+func _roll_enemy_intent() -> Dictionary:
+	var script_mode: String = str(active_profile.get("script_mode", "fixed_cycle"))
+	match script_mode:
+		"fixed_cycle":
+			return _roll_fixed_cycle_intent()
+		"state_reactive":
+			return _roll_escalating_intent()
+		"weighted_policy":
+			return _roll_weighted_intent()
+		_:
+			return _roll_fixed_cycle_intent()
+
+func _roll_fixed_cycle_intent() -> Dictionary:
+	var cycle: Array = active_profile.get("cycle", [])
+	if cycle.is_empty():
+		return _fallback_intent()
+	var step: Dictionary = cycle[cycle_step % cycle.size()]
+	cycle_step += 1
+	var damage: int = _roll_damage_in_range(
+		int(step.get("damage_min", 5)),
+		int(step.get("damage_max", 8))
+	)
+	damage += _enrage_bonus()
+	var intent: Dictionary = {
+		"intent_type": str(step.get("intent_type", "attack")),
+		"damage": damage,
+		"telegraph_text": _format_telegraph(step, damage),
+	}
+	if step.has("block_gain"):
+		intent["block_gain"] = int(step.get("block_gain", 0))
+	if step.has("apply_status"):
+		intent["apply_status"] = str(step.get("apply_status", ""))
+		intent["status_stacks"] = int(step.get("status_stacks", 1))
+	return intent
+
+func _roll_escalating_intent() -> Dictionary:
+	var base_min: int = int(active_profile.get("base_damage_min", 3))
+	var base_max: int = int(active_profile.get("base_damage_max", 4))
+	var per_turn: int = int(active_profile.get("escalation_per_turn", 1))
+	var cap: int = int(active_profile.get("escalation_cap", 8))
+	var escalation: int = min((tsre.turn_index - 1) * per_turn, cap)
+	var damage: int = _roll_damage_in_range(base_min + escalation, base_max + escalation)
+	damage += _enrage_bonus()
+	var cycle: Array = active_profile.get("cycle", [])
+	var step: Dictionary = cycle[0] if not cycle.is_empty() else {}
+	return {
+		"intent_type": "attack",
+		"damage": damage,
+		"telegraph_text": _format_telegraph(step, damage),
+	}
+
+func _roll_weighted_intent() -> Dictionary:
+	var weights: Dictionary = active_profile.get("intent_weights", {})
+	var cycle: Array = active_profile.get("cycle", [])
+	if weights.is_empty() or cycle.is_empty():
+		return _fallback_intent()
+
+	var candidates: Array = []
+	var cumulative: Array = []
+	var total: int = 0
+	for step in cycle:
+		var intent_type: String = str(step.get("intent_type", "attack"))
+		var w: int = int(weights.get(intent_type, 0))
+		if w <= 0:
+			continue
+		total += w
+		candidates.append(step)
+		cumulative.append(total)
+
+	if total <= 0 or candidates.is_empty():
+		return _fallback_intent()
+
 	var draw: Dictionary = rng.draw_next("encounter.intent")
-	# 5..8 damage deterministic band for prototype readability.
-	return 5 + int(draw.get("value", 0)) % 4
+	var roll: int = int(draw.get("value", 0)) % total
+	var selected: Dictionary = candidates[0]
+	for i in range(cumulative.size()):
+		if roll < int(cumulative[i]):
+			selected = candidates[i]
+			break
+
+	var damage: int = _roll_damage_in_range(
+		int(selected.get("damage_min", 3)),
+		int(selected.get("damage_max", 5))
+	)
+	damage += _enrage_bonus()
+	var intent: Dictionary = {
+		"intent_type": str(selected.get("intent_type", "attack")),
+		"damage": damage,
+		"telegraph_text": _format_telegraph(selected, damage),
+	}
+	if selected.has("energy_drain"):
+		intent["energy_drain"] = int(selected.get("energy_drain", 0))
+	if selected.has("discard_count"):
+		intent["discard_count"] = int(selected.get("discard_count", 0))
+	if selected.has("apply_status"):
+		intent["apply_status"] = str(selected.get("apply_status", ""))
+		intent["status_stacks"] = int(selected.get("status_stacks", 1))
+	return intent
+
+func _roll_damage_in_range(dmg_min: int, dmg_max: int) -> int:
+	if dmg_min >= dmg_max:
+		return dmg_min
+	var draw: Dictionary = rng.draw_next("encounter.intent")
+	var spread: int = dmg_max - dmg_min + 1
+	return dmg_min + int(draw.get("value", 0)) % spread
+
+func _enrage_bonus() -> int:
+	var enrage_start: int = int(active_profile.get("enrage_start_turn", 12))
+	var enrage_step: int = int(active_profile.get("enrage_damage_step", 1))
+	if tsre.turn_index < enrage_start:
+		return 0
+	return (tsre.turn_index - enrage_start + 1) * enrage_step
+
+func _fallback_intent() -> Dictionary:
+	var draw: Dictionary = rng.draw_next("encounter.intent")
+	return {
+		"intent_type": "attack",
+		"damage": 5 + int(draw.get("value", 0)) % 4,
+		"telegraph_text": "Attack",
+	}
+
+func _format_telegraph(step: Dictionary, damage: int) -> String:
+	var template: String = str(step.get("telegraph_text", "Attack for {dmg}"))
+	template = template.replace("{dmg}", str(damage))
+	template = template.replace("{block}", str(int(step.get("block_gain", 0))))
+	template = template.replace("{drain}", str(int(step.get("energy_drain", 0))))
+	template = template.replace("{discard}", str(int(step.get("discard_count", 0))))
+	return template
 
 func _encounter_title() -> String:
-	match encounter_index:
-		1:
-			return "Encounter 1 • Ambush Patrol"
-		2:
-			return "Encounter 2 • Warden Counterpush"
-		_:
-			return "Encounter %d • Escalation" % encounter_index
+	var seq: Dictionary = _sequence_for_encounter(encounter_index)
+	var title: String = str(seq.get("title", ""))
+	if title != "":
+		return "Encounter %d • %s" % [encounter_index, title]
+	return "Encounter %d • %s" % [encounter_index, str(active_profile.get("display_name", "Unknown"))]
 
 func _encounter_intent_style() -> String:
-	match encounter_index:
-		1:
-			return "Steady pressure"
-		2:
-			return "Aggressive opener"
-		_:
-			return "Escalating pattern"
+	return str(active_profile.get("display_name", "Steady Pressure"))
 
 func _encounter_intro_flavor() -> String:
-	match encounter_index:
-		1:
-			return "Scout whistles echo through the corridor."
-		2:
-			return "Heavy boots thunder as the warden rushes in."
-		_:
-			return "The dungeon stirs with a harsher tempo."
+	var seq: Dictionary = _sequence_for_encounter(encounter_index)
+	var flavor: String = str(seq.get("flavor", ""))
+	if flavor != "":
+		return flavor
+	return "The dungeon stirs with a harsher tempo."
 
 func _resolve_queue_once() -> void:
 	if not queue.has_items():
@@ -354,8 +594,12 @@ func _apply_effect_result(result: Dictionary) -> Array:
 		return drawn_cards
 	var delta: Dictionary = result.get("delta", {})
 	if delta.has("hp_delta"):
-		# Negative hp_delta means damage to enemy in this prototype.
-		var dmg: int = max(0, -int(delta.get("hp_delta", 0)))
+		var raw_dmg: int = max(0, -int(delta.get("hp_delta", 0)))
+		# Apply player's outgoing damage multiplier (strength/weakness)
+		var deal_mult: float = player_statuses.get_damage_dealt_multiplier() if player_statuses != null else 1.0
+		# Apply enemy's incoming damage multiplier (vulnerability)
+		var take_mult: float = enemy_statuses.get_damage_taken_multiplier() if enemy_statuses != null else 1.0
+		var dmg: int = max(0, int(float(raw_dmg) * deal_mult * take_mult))
 		var blocked: int = min(enemy_block, dmg)
 		enemy_block -= blocked
 		var hp_loss: int = max(0, dmg - blocked)
@@ -367,20 +611,31 @@ func _apply_effect_result(result: Dictionary) -> Array:
 			var drawn: Variant = dls.draw_one()
 			if drawn != null:
 				drawn_cards.append(_card_instance_id(drawn))
+	if delta.has("apply_status"):
+		var status_id: String = str(delta.get("apply_status", ""))
+		var stacks: int = int(delta.get("status_stacks", 1))
+		var duration: int = int(delta.get("status_duration", -1))
+		var target: String = str(delta.get("status_target", "enemy"))
+		if status_id != "":
+			var tracker: Variant = enemy_statuses if target == "enemy" else player_statuses
+			if tracker != null:
+				tracker.apply(status_id, stacks, duration)
 	return drawn_cards
 
 func _check_combat_end() -> void:
-	if combat_result != "in_progress":
+	if combat_result != RESULT_IN_PROGRESS:
 		return
 	if enemy_hp <= 0:
-		combat_result = "player_win"
+		combat_result = RESULT_PLAYER_WIN
 		tsre.transition_to(tsre.PHASE_COMBAT_END)
 		_record_event("combat_end", {"result": combat_result, "turn": tsre.turn_index})
 		_present_reward_checkpoint()
 	elif player_hp <= 0:
-		combat_result = "player_lose"
+		combat_result = RESULT_PLAYER_LOSE
 		tsre.transition_to(tsre.PHASE_COMBAT_END)
 		_record_event("combat_end", {"result": combat_result, "turn": tsre.turn_index})
+		if floor_runner != null:
+			floor_runner.on_combat_complete(combat_result)
 
 func choose_reward_by_index(offer_index: int) -> Dictionary:
 	if offer_index < 0 or offer_index >= reward_offer.size():
@@ -391,7 +646,7 @@ func choose_reward_by_index(offer_index: int) -> Dictionary:
 	return choose_reward(str(reward.get("card_id", "")))
 
 func choose_reward(card_id: String) -> Dictionary:
-	if reward_state != "presented":
+	if reward_state != REWARD_PRESENTED:
 		_remember_reject("ERR_REWARD_NOT_AVAILABLE")
 		refresh_hud()
 		return {"ok": false, "reason": "ERR_REWARD_NOT_AVAILABLE"}
@@ -404,7 +659,7 @@ func choose_reward(card_id: String) -> Dictionary:
 	reward_selected_card_id = card_id
 	var reward_live_card: Dictionary = _live_runtime_card(card_id, _encounter_runtime_scope("reward"), reward_commit_count)
 	reward_commit_count += 1
-	reward_state = "applied"
+	reward_state = REWARD_APPLIED
 	run_master_deck.append(card_id)
 	dls.discard_pile.append(reward_live_card)
 	reward_summary_text = "Added %s to discard. Deck now %d cards." % [_display_name_for_card(card_id), run_master_deck.size()]
@@ -418,9 +673,9 @@ func choose_reward(card_id: String) -> Dictionary:
 	return {"ok": true, "card_id": card_id}
 
 func dismiss_reward_checkpoint() -> void:
-	if reward_state != "applied":
+	if reward_state != REWARD_APPLIED:
 		return
-	reward_state = "closed"
+	reward_state = REWARD_CLOSED
 	_record_event("reward_checkpoint_closed", {
 		"draft_instance_id": reward_draft_instance_id,
 		"checkpoint_id": reward_checkpoint_id,
@@ -429,13 +684,17 @@ func dismiss_reward_checkpoint() -> void:
 	refresh_hud()
 
 func start_next_encounter() -> void:
-	if reward_state != "applied" and reward_state != "closed":
+	if reward_state != REWARD_APPLIED and reward_state != REWARD_CLOSED:
 		_remember_reject("ERR_REWARD_NOT_AVAILABLE")
 		refresh_hud()
 		return
+	# If running under a floor controller, hand control back to it
+	if floor_runner != null:
+		floor_runner.on_combat_complete(combat_result)
+		return
 	encounter_index += 1
-	combat_result = "in_progress"
-	reward_state = "none"
+	combat_result = RESULT_IN_PROGRESS
+	reward_state = REWARD_NONE
 	reward_checkpoint_id = ""
 	reward_draft_instance_id = ""
 	reward_offer = []
@@ -446,14 +705,22 @@ func start_next_encounter() -> void:
 	tsre.turn_index = 1
 	tsre.phase_index = 0
 	tsre.resolve_lock = false
+	active_profile = _profile_for_encounter(encounter_index)
+	cycle_step = 0
+	enemy_max_hp = int(active_profile.get("enemy_hp_base", DEFAULT_ENEMY_MAX_HP))
 	player_hp = PLAYER_MAX_HP
 	player_block = 0
-	enemy_hp = ENEMY_MAX_HP
+	enemy_hp = enemy_max_hp
 	enemy_block = 0
 	energy = TURN_ENERGY
 	_bootstrap_demo_state()
-	enemy_intent_damage = _roll_enemy_intent_damage()
-	_record_event("encounter_start", {"encounter_index": encounter_index, "turn": tsre.turn_index, "reward_card_id": reward_selected_card_id})
+	enemy_intent = _roll_enemy_intent()
+	_record_event("encounter_start", {
+		"encounter_index": encounter_index,
+		"turn": tsre.turn_index,
+		"reward_card_id": reward_selected_card_id,
+		"profile_id": str(active_profile.get("profile_id", "steady")),
+	})
 	refresh_hud()
 
 func run_fixture(path: String) -> Dictionary:
@@ -468,7 +735,7 @@ func run_fixture(path: String) -> Dictionary:
 
 	var inputs: Array = fixture.get("inputs", [])
 	for step in inputs:
-		if combat_result != "in_progress":
+		if combat_result != RESULT_IN_PROGRESS:
 			break
 		_apply_step(step)
 
@@ -589,19 +856,35 @@ func _card_speed_class_priority(card_value: Variant) -> int:
 	return int(card_catalog.speed_class_priority(card_id))
 
 func _auto_finish_combat(max_turns: int) -> void:
-	while combat_result == "in_progress" and tsre.turn_index <= max_turns:
-		while combat_result == "in_progress" and energy > 0:
-			var strike_card: String = _first_card_by_resolved_id("strike")
-			if strike_card != "":
-				player_play_card(strike_card)
-				continue
-			var defend_card: String = _first_card_by_resolved_id("defend")
-			if defend_card != "":
-				player_play_card(defend_card)
+	while combat_result == RESULT_IN_PROGRESS and tsre.turn_index <= max_turns:
+		while combat_result == RESULT_IN_PROGRESS and energy > 0:
+			var playable_card: String = _first_playable_card()
+			if playable_card != "":
+				player_play_card(playable_card)
 				continue
 			break
-		if combat_result == "in_progress":
+		if combat_result == RESULT_IN_PROGRESS:
 			player_pass()
+
+func _first_playable_card() -> String:
+	# Prefer attacks to end fights, then defends, then anything else.
+	for c in dls.hand:
+		var cid: String = _card_instance_card_id(c)
+		if _card_play_reject_reason(c) == "" and _card_palette_tag(cid) == "attack":
+			return _card_instance_id(c)
+	for c in dls.hand:
+		var cid: String = _card_instance_card_id(c)
+		if _card_play_reject_reason(c) == "" and _card_palette_tag(cid) == "defend":
+			return _card_instance_id(c)
+	for c in dls.hand:
+		if _card_play_reject_reason(c) == "":
+			return _card_instance_id(c)
+	return ""
+
+func _card_palette_tag(card_id: String) -> String:
+	if card_catalog == null or not card_catalog.has_card(card_id):
+		return ""
+	return str(card_catalog.palette_key(card_id))
 
 func _first_card_by_resolved_id(target_card_id: String) -> String:
 	for c in dls.hand:
@@ -617,7 +900,7 @@ func _hand_card_entry(instance_id: String) -> Variant:
 	return null
 
 func _get_play_gate_reason() -> String:
-	if combat_result != "in_progress":
+	if combat_result != RESULT_IN_PROGRESS:
 		return "ERR_COMBAT_COMPLETE"
 	var input_gate: Dictionary = tsre.get_input_gate()
 	if not input_gate.get("ok", false):
@@ -627,7 +910,7 @@ func _get_play_gate_reason() -> String:
 	return ""
 
 func _get_pass_gate_reason() -> String:
-	if combat_result != "in_progress":
+	if combat_result != RESULT_IN_PROGRESS:
 		return "ERR_COMBAT_COMPLETE"
 	var input_gate: Dictionary = tsre.get_input_gate()
 	if not input_gate.get("ok", false):
@@ -681,7 +964,7 @@ func _card_target_reason(card_value: Variant) -> String:
 		return ""
 	match card_catalog.target_mode(card_id):
 		"single_enemy":
-			if combat_result != "in_progress" or enemy_hp <= 0:
+			if combat_result != RESULT_IN_PROGRESS or enemy_hp <= 0:
 				return "ERR_NO_VALID_TARGETS"
 	return ""
 
@@ -703,17 +986,51 @@ func _clear_reject() -> void:
 func _present_reward_checkpoint() -> void:
 	reward_checkpoint_count += 1
 	reward_checkpoint_id = "combat_clear_%d" % tsre.turn_index
-	var draft: Dictionary = reward_draft.build_card_offer(rng, _reward_context(reward_checkpoint_id, "base_reward", "base_set"), [])
+	var draft: Dictionary = reward_draft.build_card_offer(rng, _live_reward_context_for_checkpoint(reward_checkpoint_id), [])
 	reward_draft_instance_id = str(draft.get("draft_instance_id", ""))
 	reward_offer = draft.get("offers", []).duplicate(true)
 	reward_selected_card_id = ""
 	reward_summary_text = "Choose 1 of 3 cards to add to your deck."
-	reward_state = "presented"
+	reward_state = REWARD_PRESENTED
 	_record_event("reward_offer", {
 		"checkpoint_id": reward_checkpoint_id,
 		"draft_instance_id": reward_draft_instance_id,
 		"offer_card_ids": _reward_offer_card_ids(),
 	})
+
+func _live_reward_context_for_checkpoint(checkpoint_id: String) -> Dictionary:
+	var reward_pool_tag: String = "base_reward"
+	var active_unlock_key: String = "base_set"
+	if reward_checkpoint_count >= 2 and _run_contains_unlock_key("gsm_set", 4) and _reward_pool_has_entries("gsm_reward", 3):
+		reward_pool_tag = "gsm_reward"
+		active_unlock_key = "gsm_set"
+	return _reward_context(checkpoint_id, reward_pool_tag, active_unlock_key)
+
+func _run_contains_unlock_key(target_unlock_key: String, minimum_count: int = 1) -> bool:
+	if minimum_count <= 0:
+		return true
+	var match_count: int = 0
+	for card_id_variant in run_master_deck:
+		if _unlock_key_for_card(str(card_id_variant)) != target_unlock_key:
+			continue
+		match_count += 1
+		if match_count >= minimum_count:
+			return true
+	return false
+
+func _reward_pool_has_entries(reward_pool_tag: String, minimum_entries: int = 3) -> bool:
+	if card_catalog == null:
+		return false
+	return card_catalog.reward_pool_entries(reward_pool_tag).size() >= minimum_entries
+
+func _unlock_key_for_card(card_id: String) -> String:
+	if card_catalog == null or not card_catalog.has_card(card_id):
+		return "base_set"
+	var card: Dictionary = card_catalog.get_card(card_id)
+	var unlock_key: String = str(card.get("unlock_key", "base_set")).strip_edges()
+	if unlock_key == "":
+		return "base_set"
+	return unlock_key
 
 func _reward_context(checkpoint_id: String, reward_pool_tag: String, active_unlock_key: String) -> Dictionary:
 	return {
@@ -739,6 +1056,57 @@ func _display_name_for_card(card_id: String) -> String:
 		return card_presenter.display_name(card_id)
 	return card_id
 
+func _event_card_label_from_ids(card_id: String, instance_id: String = "") -> String:
+	var resolved_card_id: String = card_id.strip_edges()
+	if card_instance != null and resolved_card_id != "":
+		resolved_card_id = card_instance.card_id_of(resolved_card_id, card_catalog)
+	var display_name: String = _display_name_for_card(resolved_card_id)
+	var debug_instance_id: String = instance_id.strip_edges()
+	if display_name == "":
+		return debug_instance_id if debug_instance_id != "" else resolved_card_id
+	if debug_instance_id != "" and debug_instance_id != resolved_card_id and debug_instance_id != display_name:
+		return "%s [%s]" % [display_name, debug_instance_id]
+	return display_name
+
+func _reason_text(reason_code: String) -> String:
+	match reason_code:
+		"ERR_RESOLVE_LOCKED":
+			return "Effects are resolving right now"
+		"ERR_NOT_ENOUGH_ENERGY":
+			return "you need 1 more energy"
+		"ERR_COMBAT_COMPLETE":
+			return "combat is already over"
+		"ERR_NO_VALID_TARGETS":
+			return "no valid target is available"
+		"ERR_CARD_NOT_IN_HAND":
+			return "that card is no longer in hand"
+		"ERR_PHASE_DISALLOWS_INPUT":
+			return "you cannot act during this phase"
+		"ERR_REWARD_NOT_AVAILABLE":
+			return "no reward is available right now"
+		"ERR_REWARD_ALREADY_CLAIMED":
+			return "this checkpoint reward was already claimed"
+		"ERR_INVALID_REWARD_SELECTION":
+			return "that reward choice is not valid"
+		"ERR_FOCUS_REQUIRED":
+			return "this advanced gem action requires FOCUS"
+		"ERR_STACK_EMPTY":
+			return "the gem stack is empty"
+		"ERR_STACK_TOP_MISMATCH":
+			return "top gem does not match this card"
+		"ERR_STACK_TARGET_MISMATCH":
+			return "targeted gem does not match this card"
+		"ERR_SELECTOR_INVALID":
+			return "that gem selector is out of range"
+		_:
+			return reason_code if reason_code != "" else "action unavailable"
+
+func _reward_offer_display_text(card_ids: Array) -> String:
+	var names: Array = []
+	for card_id_variant in card_ids:
+		names.append(_display_name_for_card(str(card_id_variant)))
+	return ", ".join(names)
+
 func _get_recent_event_lines(limit: int = 4) -> Array:
 	var lines: Array = []
 	var start: int = max(0, event_stream.size() - limit)
@@ -756,7 +1124,7 @@ func _format_event_line(event: Dictionary) -> String:
 		"play_commit":
 			return "#%d Played %s. Energy %d." % [
 				order_index,
-				str(payload.get("card_id", "-")),
+				_event_card_label_from_ids(str(payload.get("card_id", "-")), str(payload.get("card_id", "-"))),
 				int(payload.get("energy_after", 0)),
 			]
 		"effect_resolve":
@@ -764,9 +1132,11 @@ func _format_event_line(event: Dictionary) -> String:
 			var result: Dictionary = payload.get("result", {})
 			var effect: Dictionary = payload.get("effect", item.get("effect", {}))
 			var effect_type: String = str(effect.get("type", ""))
+			var source_instance_id: String = str(item.get("source_instance_id", "-"))
+			var source_label: String = _event_card_label_from_ids(str(item.get("card_id", source_instance_id)), source_instance_id)
 			var base_line := "#%d Resolve %s via timing %d -> speed %d -> seq %d." % [
 				order_index,
-				str(item.get("source_instance_id", "-")),
+				source_label,
 				int(item.get("timing_window_priority", 0)),
 				int(item.get("speed_class_priority", 0)),
 				int(item.get("enqueue_sequence_id", 0)),
@@ -816,20 +1186,48 @@ func _format_event_line(event: Dictionary) -> String:
 				return "%s Drew: %s." % [base_line, ", ".join(drawn_cards)]
 			return base_line
 		"enemy_attack":
-			return "#%d Enemy hit for %d (%d blocked, %d HP lost)." % [
+			var intent_type: String = str(payload.get("intent_type", "attack"))
+			var base_attack_text: String = "#%d Enemy %s for %d (%d blocked, %d HP lost)." % [
 				order_index,
+				intent_type,
 				int(payload.get("incoming", 0)),
 				int(payload.get("blocked", 0)),
 				int(payload.get("hp_loss", 0)),
 			]
+			var extras: Array = []
+			if payload.has("enemy_block_gain"):
+				extras.append("+%d block" % int(payload.get("enemy_block_gain", 0)))
+			if payload.has("energy_drain"):
+				extras.append("-%d energy next turn" % int(payload.get("energy_drain", 0)))
+			if payload.has("force_discarded"):
+				var discarded: Array = payload.get("force_discarded", [])
+				if not discarded.is_empty():
+					extras.append("discarded %s" % ", ".join(discarded))
+			if extras.is_empty():
+				return base_attack_text
+			return "%s Also: %s." % [base_attack_text, "; ".join(extras)]
 		"pass":
 			return "#%d Passed turn." % order_index
+		"play_reject":
+			return "#%d Can't play %s: %s." % [
+				order_index,
+				_event_card_label_from_ids(str(payload.get("card_id", "-")), str(payload.get("instance_id", payload.get("card_id", "")))),
+				_reason_text(str(payload.get("reason", ""))),
+			]
 		"turn_start":
-			return "#%d Turn %d. Enemy intent %d." % [
+			var turn_intent_type: String = str(payload.get("enemy_intent_type", "attack"))
+			var turn_line: String = "#%d Turn %d. Enemy intent: %s (%d dmg)." % [
 				order_index,
 				int(payload.get("turn", 0)),
+				turn_intent_type,
 				int(payload.get("enemy_intent_damage", 0)),
 			]
+			if payload.has("energy_drained"):
+				turn_line += " Energy drained -%d (now %d)." % [
+					int(payload.get("energy_drained", 0)),
+					int(payload.get("energy_after_drain", 0)),
+				]
+			return turn_line
 		"combat_end":
 			return "#%d Combat ended: %s." % [
 				order_index,
@@ -838,7 +1236,7 @@ func _format_event_line(event: Dictionary) -> String:
 		"reward_offer":
 			return "#%d Reward checkpoint opened: %s." % [
 				order_index,
-				", ".join(payload.get("offer_card_ids", [])),
+				_reward_offer_display_text(payload.get("offer_card_ids", [])),
 			]
 		"reward_pick":
 			return "#%d Reward claimed: %s." % [
@@ -918,6 +1316,38 @@ func _gem_stack_top_window(limit: int) -> Array:
 	if gsm == null:
 		return []
 	return gsm.peek_n(limit)
+
+func _load_pressure_profiles() -> void:
+	var payload: Dictionary = _read_json(PRESSURE_PROFILES_PATH)
+	pressure_profiles = {}
+	encounter_sequence = []
+	for profile in payload.get("profiles", []):
+		if not (profile is Dictionary):
+			continue
+		var pid: String = str(profile.get("profile_id", "")).strip_edges()
+		if pid != "":
+			pressure_profiles[pid] = profile
+	for seq_entry in payload.get("encounter_sequence", []):
+		if seq_entry is Dictionary:
+			encounter_sequence.append(seq_entry)
+
+func _profile_for_encounter(enc_index: int) -> Dictionary:
+	var seq: Dictionary = _sequence_for_encounter(enc_index)
+	var pid: String = str(seq.get("profile_id", "")).strip_edges()
+	if pid != "" and pressure_profiles.has(pid):
+		return pressure_profiles[pid]
+	# Cycle through available profiles for encounters beyond the sequence
+	var profile_ids: Array = pressure_profiles.keys()
+	if profile_ids.is_empty():
+		return {"profile_id": "steady", "display_name": "Steady Pressure", "script_mode": "fixed_cycle", "enemy_hp_base": DEFAULT_ENEMY_MAX_HP, "cycle": [{"intent_type": "attack", "damage_min": 5, "damage_max": 8, "telegraph_text": "Attack for {dmg}"}], "enrage_start_turn": 12, "enrage_damage_step": 1}
+	profile_ids.sort()
+	return pressure_profiles[profile_ids[(enc_index - 1) % profile_ids.size()]]
+
+func _sequence_for_encounter(enc_index: int) -> Dictionary:
+	for seq_entry in encounter_sequence:
+		if int(seq_entry.get("encounter_index", -1)) == enc_index:
+			return seq_entry
+	return {}
 
 func _read_json(path: String) -> Dictionary:
 	if not FileAccess.file_exists(path):

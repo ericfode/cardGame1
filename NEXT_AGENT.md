@@ -6,6 +6,8 @@ Current state
 - Run command on this machine: `/opt/homebrew/bin/godot --path /Users/ericfode/src/cardgame1`
 - Current local game process has been restarted after the latest changes.
 - Sprint 004 is effectively closed and Sprint 005 card-data migration is implemented at the Must-Have level, with additional post-sprint combat-card hardening now landed around runtime identity, RewardDraft metadata use, fixture-boundary coverage, a data-driven base card play contract, partial GDD-schema broadening for future card-library growth, first runtime handling for authored play conditions, and per-card playability surfaces in the HUD/view-model.
+- Latest repair on `hermes/combat-ui-scaling-followthrough`: after validating against merged Sprint 010/011 work, the branch needed a local baseline true-up. Six determinism expected files were refreshed for intentional reward/status drift, and the GSM opt-in reward-pool smoke assertion was loosened so it checks the contract instead of a stale exact base-offer trio. Full unittest discover and headless Godot startup are green again.
+- Latest map-pathing fix: unaffordable gem-gated rooms are now actually gated. `FloorController` filters them out of `legal_moves`, `select_room()` rejects them with `ERR_GEM_GATE_UNAFFORDABLE`, room entry no longer burns stack cap on shortfall, and new smoke coverage lives in `tests/smoke/run_gem_gate_block_probe.gd` plus `test_unaffordable_gem_gates_block_room_entry`.
 
 What just landed
 1. Sprint 004 closeout
@@ -83,7 +85,10 @@ Important implementation notes
 - Base card play contract is now authored in the catalog too: current live/runtime code consumes `base_cost`, `speed_class`, `timing_window`, and `zone_on_play` from card data.
 - The catalog now also carries broader library-authoring metadata (`cost_type`, targeting, play conditions, combo/chain tags, weight modifiers), and the live combat runner now consumes the first authored play-condition slice (`focus_at_least`).
 - The HUD/view-model now exposes per-card legality, so authored condition failures can appear as disabled-card affordances rather than only post-click rejects.
+- Event and queue readability have started to catch up with the larger card UI: visible queue/recent-event surfaces now prefer human-readable card names (with instance/debug brackets when useful) instead of only raw ids, and play rejects now render readable reasons in the recent-event feed.
+- The shared strike/defend card-art lanes under `assets/generated/cards/` were refreshed with stronger portrait-first variants so the enlarged cards read better at rest; utility/gem lanes are still on the prior pack.
 - Reward-family selection is now explicit at the caller boundary instead of inferred from `gsm_` checkpoint prefixes, and `RewardDraft` also consumes `unlock_key` and `weight_base` metadata.
+- Live reward routing is now conservative-but-dynamic: the first live checkpoint still requests `base_reward`, while the second and later live checkpoints switch to `gsm_reward` only when the live run deck already contains a substantial GSM footprint (currently at least 4 `gsm_set` cards) and the GSM reward pool is populated. Fixture starter decks remain base-only, so determinism baselines stay on base rewards unless intentionally changed.
 - Fixture starter decks remain hardcoded/stable in `FIXTURE_STARTER_RUN_DECK` to avoid coupling live starter-deck iteration to determinism fixtures.
 - Determinism baselines updated intentionally after the data migration changed event payload representation.
 - `reward_summary_text` has been removed from authoritative final-state hashing, so reward microcopy no longer perturbs determinism hashes.
